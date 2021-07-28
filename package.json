@@ -1,6 +1,6 @@
 {
-    "name": "gatsby-plugin-s3",
-    "version": "0.3.8",
+    "name": "@amplifysa/gatsby-plugin-s3",
+    "version": "0.3.8-amplify",
     "description": "Enables you to deploy your gatsby site to a S3 bucket.",
     "main": "index.js",
     "bin": "bin.js",
@@ -16,7 +16,7 @@
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/jariz/gatsby-plugin-s3.git"
+        "url": "git+https://github.com/amplifysa/gatsby-plugin-s3.git"
     },
     "keywords": [
         "gatsby",
