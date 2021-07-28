@@ -82,6 +82,9 @@ export interface S3PluginOptions extends PluginOptions {
     // Remove S3 objects if they no longer exist locally
     removeNonexistentObjects?: boolean;
 
+    // a list of file globs that should not be removed via removeNonexistentObjects
+    retainObjectsPatterns?: string[];
+
     // Custom AWS S3 endpoint, default Amazon AWS hostname  - amazonaws.com
     customAwsEndpointHostname?: string;
 
@@ -95,6 +98,24 @@ export interface S3PluginOptions extends PluginOptions {
 
     // Max number of files to upload in parallel.
     parallelLimit?: number;
+
+    // The maximum amount of retries to perform for a service request.
+    maxRetries?: number;
+
+    // The maximum time in milliseconds that the connection phase of the request
+    // should be allowed to take. This only limits the connection phase and has
+    // no impact once the socket has established a connection.
+    connectTimeout?: number;
+
+    // Sets the socket to timeout after the specified amount of milliseconds of inactivity on the socket.
+    timeout?: number;
+
+    // By default an exponential backoff is used for retryable failures
+    // Use this option to use a fixed retry delay instead of exponential for particularly flaky connections
+    fixedRetryDelay?: number;
+
+    // Whether or not the plugin should output verbose logs from S3 uploads
+    verbose?: boolean;
 }
 
 export const DEFAULT_OPTIONS: S3PluginOptions = {
@@ -108,6 +129,7 @@ export const DEFAULT_OPTIONS: S3PluginOptions = {
     generateIndexPageForRedirect: true,
     generateMatchPathRewrites: true,
     removeNonexistentObjects: true,
+    retainObjectsPatterns: [],
     enableS3StaticWebsiteHosting: true,
     parallelLimit: 20,
 

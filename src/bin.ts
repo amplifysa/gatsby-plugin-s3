@@ -25,6 +25,7 @@ import isCI from 'is-ci';
 import { getS3WebsiteDomainUrl, withoutLeadingSlash } from './util';
 import { AsyncFunction, asyncify, parallelLimit } from 'async';
 import proxy from 'proxy-agent';
+import globToRegExp from 'glob-to-regexp';
 
 const pe = new PrettyError();
 
@@ -105,7 +106,12 @@ const createSafeS3Key = (key: string): string => {
     return key;
 };
 
-const deploy = async ({ yes, bucket, userAgent }: { yes: boolean; bucket: string; userAgent: string }) => {
+export interface DeployArguments {
+    yes?: boolean;
+    bucket?: string;
+    userAgent?: string;
+}
+export const deploy = async ({ yes, bucket, userAgent }: DeployArguments = {}) => {
     const spinner = ora({ text: 'Retrieving bucket info...', color: 'magenta', stream: process.stdout }).start();
     let dontPrompt = yes;
 
@@ -131,11 +137,22 @@ const deploy = async ({ yes, bucket, userAgent }: { yes: boolean; bucket: string
             };
         }
 
+        httpOptions = {
+            agent: process.env.HTTP_PROXY ? proxy(process.env.HTTP_PROXY) : undefined,
+            timeout: config.timeout,
+            connectTimeout: config.connectTimeout,
+            ...httpOptions,
+        };
+
         const s3 = new S3({
             region: config.region,
             endpoint: config.customAwsEndpointHostname,
-            customUserAgent: userAgent || '',
+            customUserAgent: userAgent ?? '',
             httpOptions,
+            logger: config.verbose ? console : undefined,
+            retryDelayOptions: {
+                customBackoff: process.env.fixedRetryDelay ? () => Number(config.fixedRetryDelay) : undefined,
+            },
         });
 
         const { exists, region } = await getBucketInfo(config, s3);
@@ -210,6 +227,10 @@ const deploy = async ({ yes, bucket, userAgent }: { yes: boolean; bucket: string
         spinner.text = 'Listing objects...';
         spinner.color = 'green';
         const objects = await listAllObjects(s3, config.bucketName, config.bucketPrefix);
+        const keyToETagMap = objects.reduce((acc: any, curr) => {
+            acc[curr.Key!] = curr.ETag;
+            return acc;
+        }, {});
 
         spinner.color = 'cyan';
         spinner.text = 'Syncing...';
@@ -232,11 +253,11 @@ const deploy = async ({ yes, bucket, userAgent }: { yes: boolean; bucket: string
                     const data = await streamToPromise(hashStream);
 
                     const tag = `"${data}"`;
-                    const object = objects.find(currObj => currObj.Key === key && currObj.ETag === tag);
+                    const objectUnchanged = keyToETagMap[key] === tag;
 
                     isKeyInUse[key] = true;
 
-                    if (!object) {
+                    if (!objectUnchanged) {
                         try {
                             const upload = new S3.ManagedUpload({
                                 service: s3,
@@ -285,11 +306,11 @@ const deploy = async ({ yes, bucket, userAgent }: { yes: boolean; bucket: string
                     const tag = `"${createHash('md5')
                         .update(redirectLocation)
                         .digest('hex')}"`;
-                    const object = objects.find(currObj => currObj.Key === key && currObj.ETag === tag);
+                    const objectUnchanged = keyToETagMap[key] === tag;
 
                     isKeyInUse[key] = true;
 
-                    if (object) {
+                    if (objectUnchanged) {
                         // object with exact hash already exists, abort.
                         return;
                     }
@@ -325,9 +346,15 @@ const deploy = async ({ yes, bucket, userAgent }: { yes: boolean; bucket: string
         await promisifiedParallelLimit(uploadQueue, config.parallelLimit as number);
 
         if (config.removeNonexistentObjects) {
+            const persistObjects = (config.retainObjectsPatterns ?? []).map(glob =>
+                globToRegExp(glob, { globstar: true, extended: true })
+            );
             const objectsToRemove = objects
                 .map(obj => ({ Key: obj.Key as string }))
-                .filter(obj => obj.Key && !isKeyInUse[obj.Key]);
+                .filter(obj => {
+                    if (!obj.Key || isKeyInUse[obj.Key]) return false;
+                    return persistObjects.reduce((result, regexp) => result && !regexp.test(obj.Key), true);
+                });
 
             for (let i = 0; i < objectsToRemove.length; i += OBJECTS_TO_REMOVE_PER_REQUEST) {
                 const objectsToRemoveInThisRequest = objectsToRemove.slice(i, i + OBJECTS_TO_REMOVE_PER_REQUEST);
@@ -372,20 +399,21 @@ yargs
     .command(
         ['deploy', '$0'],
         "Deploy bucket. If it doesn't exist, it will be created. Otherwise, it will be updated.",
-        (args: yargs.Argv) => {
-            args.option('yes', {
-                alias: 'y',
-                describe: 'Skip confirmation prompt',
-                boolean: true,
-            });
-            args.option('bucket', {
-                alias: 'b',
-                describe: 'Bucket name (if you wish to override default bucket name)',
-            });
-            args.option('userAgent', {
-                describe: 'Allow appending custom text to the User Agent string (Used in automated tests)',
-            });
-        },
+        args =>
+            args
+                .option('yes', {
+                    alias: 'y',
+                    describe: 'Skip confirmation prompt',
+                    boolean: true,
+                })
+                .option('bucket', {
+                    alias: 'b',
+                    describe: 'Bucket name (if you wish to override default bucket name)',
+                })
+                .option('userAgent', {
+                    describe: 'Allow appending custom text to the User Agent string (Used in automated tests)',
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                }) as any,
         deploy as (args: { yes: boolean; bucket: string; userAgent: string }) => void
     )
     .wrap(yargs.terminalWidth())
